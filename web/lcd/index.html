@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>meter</title>
+<style>
+  html, body {
+    margin: 0;
+    width: 512px;
+    height: 256px;
+    overflow: hidden;
+    background: #9fb09a;
+  }
+  .lcd {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    grid-template-rows: auto 1fr auto;
+    padding: 18px 26px 16px 22px;
+    color: #17201a;
+    font-family: Consolas, 'Courier New', monospace;
+    font-weight: 700;
+  }
+  .flags { grid-column: 1 / -1; display: flex; gap: 18px; font-size: 22px; letter-spacing: 1px; color: rgba(23, 32, 26, 0.16); }
+  .flags .on { color: #17201a; }
+  .value {
+    align-self: center;
+    justify-self: end;
+    font-size: 132px;
+    line-height: 1;
+    letter-spacing: -4px;
+    font-variant-numeric: tabular-nums;
+    padding-right: 10px;
+  }
+  .ghost { color: rgba(23, 32, 26, 0.09); position: absolute; }
+  .unit { align-self: end; padding-bottom: 34px; font-size: 40px; line-height: 1; }
+  .bar { grid-column: 1 / -1; height: 14px; display: flex; gap: 3px; }
+  .seg { flex: 1; background: rgba(23, 32, 26, 0.1); }
+  .seg.on { background: #17201a; }
+  .warn { color: #17201a; }
+</style>
+</head>
+<body>
+<div class="lcd">
+  <div class="flags"><span id="auto" class="on">AUTO</span><span id="dc">DC</span><span id="ac">AC</span><span id="hv">⚡</span><span id="hold">HOLD</span></div>
+  <div class="value" id="value">0.00</div>
+  <div class="unit" id="unit">V</div>
+  <div class="bar" id="bar"></div>
+</div>
+<script>
+  const valueEl = document.getElementById('value');
+  const unitEl = document.getElementById('unit');
+  const bar = document.getElementById('bar');
+  const flags = { dc: document.getElementById('dc'), ac: document.getElementById('ac'), hv: document.getElementById('hv'), hold: document.getElementById('hold') };
+  const SEGS = 32;
+  for (let i = 0; i < SEGS; i++) {
+    const s = document.createElement('div');
+    s.className = 'seg';
+    bar.appendChild(s);
+  }
+  let state = { reading: false, value: 0, unit: 'V DC', mode: 'steady', since: 0 };
+
+  function format(v) {
+    if (v >= 100) return v.toFixed(0);
+    if (v >= 10) return v.toFixed(1);
+    return v.toFixed(2);
+  }
+
+  function render(now) {
+    let v = 0;
+    let live = !!state.reading;
+    if (live) {
+      const t = (now - state.since) / 1000;
+      const settle = Math.min(1, t / 0.35);
+      const jitter = (Math.sin(now * 0.013) + Math.sin(now * 0.0071)) * 0.004;
+      if (state.mode === 'pulse') {
+        v = (Math.floor(t * 2) % 2 === 0 ? state.value : 0.4) * settle;
+      } else if (state.mode === 'mains') {
+        v = state.value * settle + Math.sin(now * 0.004) * 1.5;
+      } else {
+        v = state.value * settle;
+      }
+      v = Math.max(0, v * (1 + jitter));
+    }
+    valueEl.textContent = format(v);
+    const ac = live && state.unit.indexOf('AC') >= 0;
+    unitEl.textContent = 'V';
+    flags.dc.className = live && !ac ? 'on' : '';
+    flags.ac.className = ac ? 'on' : '';
+    flags.hv.className = live && v > 60 ? 'on warn' : '';
+    flags.hold.className = '';
+    const full = ac ? 400 : 40;
+    const lit = Math.round(Math.min(1, v / full) * SEGS);
+    for (let i = 0; i < SEGS; i++) bar.children[i].className = i < lit ? 'seg on' : 'seg';
+    requestAnimationFrame(render);
+  }
+  requestAnimationFrame(render);
+
+  window.addEventListener('message', (event) => {
+    let msg = event.data;
+    if (typeof msg === 'string') { try { msg = JSON.parse(msg); } catch { return; } }
+    if (!msg || msg.type !== 'reading') return;
+    if (!msg.reading) {
+      state = { reading: false, value: 0, unit: 'V DC', mode: 'steady', since: performance.now() };
+      return;
+    }
+    state = { reading: msg.reading, value: Number(msg.value) || 0, unit: msg.unit || 'V DC', mode: msg.mode || 'steady', since: performance.now() };
+  });
+</script>
+</body>
+</html>
